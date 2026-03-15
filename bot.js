@@ -17,10 +17,20 @@ async function initSheets() {
 
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
-  const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+const { GoogleSpreadsheet } = require("google-spreadsheet");
+const { JWT } = require("google-auth-library");
 
-  await doc.useServiceAccountAuth(creds);
-  await doc.loadInfo();
+const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+
+const auth = new JWT({
+  email: serviceAccount.client_email,
+  key: serviceAccount.private_key,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+});
+
+const doc = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
+
+await doc.loadInfo();
 
   sheetConditions = doc.sheetsByTitle["УСЛОВИЯ"];
   sheetRates = doc.sheetsByTitle["КУРСЫ ЦБ"];
