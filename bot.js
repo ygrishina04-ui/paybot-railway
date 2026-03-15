@@ -5,9 +5,11 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server started on port ${PORT}`);
-});
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+if (!BOT_TOKEN) {
+  throw new Error("BOT_TOKEN is missing");
+}
 
 const TELEGRAM_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
