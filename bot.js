@@ -88,10 +88,11 @@ async function calculate(amount, currency) {
 
   if (!cond || !rate) return null;
 
-  const markup = parseNumber(cond.Маркап);
-  const commission = parseNumber(cond.Комиссия);
-  const swift = parseNumber(cond.SWIFT);
-  const baseRate = parseNumber(rate.Курс);
+const cond = condRows.find(r => r.Валюта === currency);
+
+const markup = parseNumber(cond.Наценка);
+const commission = parseNumber(cond.Комиссия);
+const swift = parseNumber(cond.SWIFT);
 
   const finalRate = baseRate + markup;
 
