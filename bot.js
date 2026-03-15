@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const { GoogleSpreadsheet } = require("google-spreadsheet");
+const { JWT } = require("google-auth-library");
 
 const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_URL = `https://api.telegram.org/bot${TOKEN}`;
@@ -13,24 +14,24 @@ let sheetConditions;
 let sheetRates;
 let sheetHistory;
 
+function parseNumber(v) {
+  if (!v) return 0;
+  return parseFloat(v.toString().replace(",", "."));
+}
+
 async function initSheets() {
 
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
-const { GoogleSpreadsheet } = require("google-spreadsheet");
-const { JWT } = require("google-auth-library");
+  const auth = new JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  });
 
-const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const doc = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
 
-const auth = new JWT({
-  email: serviceAccount.client_email,
-  key: serviceAccount.private_key,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-});
-
-const doc = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
-
-await doc.loadInfo();
+  await doc.loadInfo();
 
   sheetConditions = doc.sheetsByTitle["УСЛОВИЯ"];
   sheetRates = doc.sheetsByTitle["КУРСЫ ЦБ"];
@@ -68,31 +69,20 @@ function currencyButtons(amount) {
 
 }
 
-function parseNumber(val) {
-
-  if (!val) return 0;
-
-  return parseFloat(
-    val.toString().replace(/\s/g, "").replace(",", ".")
-  );
-
-}
-
 async function calculate(amount, currency) {
 
   const condRows = await sheetConditions.getRows();
   const rateRows = await sheetRates.getRows();
 
-  const cond = condRows.find(r => r.Валюта === currency);
-  const rate = rateRows.find(r => r.Валюта === currency);
+  const cond = condRows.find(r => r.валюта === currency);
+  const rate = rateRows.find(r => r.валюта === currency);
 
   if (!cond || !rate) return null;
 
-const cond = condRows.find(r => r.Валюта === currency);
-
-const markup = parseNumber(cond.Наценка);
-const commission = parseNumber(cond.Комиссия);
-const swift = parseNumber(cond.SWIFT);
+  const markup = parseNumber(cond.наценка);
+  const commission = parseNumber(cond.комиссия);
+  const swift = parseNumber(cond.swift);
+  const baseRate = parseNumber(rate.курс);
 
   const finalRate = baseRate + markup;
 
@@ -112,14 +102,14 @@ const swift = parseNumber(cond.SWIFT);
 async function saveHistory(userId, username, currency, amount, rate, commission, total) {
 
   await sheetHistory.addRow({
-    Дата: new Date(),
-    UserID: userId,
-    Username: username,
-    Валюта: currency,
-    Сумма: amount,
-    Курс: rate,
-    Комиссия: commission,
-    Итого: Math.round(total)
+    дата: new Date(),
+    userid: userId,
+    username: username,
+    валюта: currency,
+    сумма: amount,
+    курс: rate,
+    комиссия: commission,
+    итого: Math.round(total)
   });
 
 }
@@ -139,7 +129,13 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
 
       if (text === "/start") {
 
-        await sendMessage(chatId, "Отправь сумму для расчета\n\nНапример:\n12500\nили\n12500 usd");
+        await sendMessage(chatId,
+`Отправь сумму для расчета
+
+Например:
+12500
+или
+12500 usd`);
 
       }
 
@@ -154,13 +150,14 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
       else if (/^\d+\s[a-zA-Z]{3}$/g.test(text)) {
 
         const parts = text.split(" ");
+
         const amount = parseFloat(parts[0]);
         const currency = parts[1].toUpperCase();
 
         const calc = await calculate(amount, currency);
 
         if (!calc) {
-          await sendMessage(chatId, "Не найден курс или условия");
+          await sendMessage(chatId, "Курс или условия не найдены");
           return;
         }
 
@@ -195,7 +192,7 @@ SWIFT: ${calc.swift} ${currency}
       const calc = await calculate(amount, currency);
 
       if (!calc) {
-        await sendMessage(chatId, "Не найден курс");
+        await sendMessage(chatId, "Курс не найден");
         return;
       }
 
@@ -214,7 +211,7 @@ SWIFT: ${calc.swift} ${currency}
 
   } catch (e) {
 
-    console.log("ERROR", e);
+    console.log("BOT ERROR", e);
 
   }
 
