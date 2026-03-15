@@ -1,88 +1,230 @@
 const express = require("express");
 const axios = require("axios");
-const { google } = require("googleapis");
+const { GoogleSpreadsheet } = require("google-spreadsheet");
+
+const TOKEN = process.env.BOT_TOKEN;
+const TELEGRAM_URL = `https://api.telegram.org/bot${TOKEN}`;
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 8080;
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const SHEET_NAME = process.env.SHEET_NAME || "Data";
-const SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+let sheetConditions;
+let sheetRates;
+let sheetHistory;
 
-const TELEGRAM_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
+async function initSheets() {
 
-function getGoogleAuth() {
-  const credentials = JSON.parse(SERVICE_ACCOUNT_JSON);
+  const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
-  return new google.auth.GoogleAuth({
-    credentials,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-  });
+  const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+
+  await doc.useServiceAccountAuth(creds);
+  await doc.loadInfo();
+
+  sheetConditions = doc.sheetsByTitle["УСЛОВИЯ"];
+  sheetRates = doc.sheetsByTitle["КУРСЫ ЦБ"];
+  sheetHistory = doc.sheetsByTitle["ИСТОРИЯ"];
+
 }
 
-async function getSheetsClient() {
-  const auth = getGoogleAuth();
-  return google.sheets({ version: "v4", auth });
-}
+async function sendMessage(chatId, text, keyboard = null) {
 
-async function appendRow(values) {
-  const sheets = await getSheetsClient();
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:D`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [values]
-    }
-  });
-}
-
-async function sendMessage(chatId, text) {
-  await axios.post(`${TELEGRAM_URL}/sendMessage`, {
+  const payload = {
     chat_id: chatId,
-    text
-  });
+    text: text
+  };
+
+  if (keyboard) payload.reply_markup = keyboard;
+
+  await axios.post(`${TELEGRAM_URL}/sendMessage`, payload);
+
 }
 
-app.get("/", (req, res) => {
-  res.send("Pay bot is running");
-});
+function currencyButtons(amount) {
 
-app.post(`/webhook/${BOT_TOKEN}`, async (req, res) => {
+  return {
+    inline_keyboard: [
+      [
+        { text: "USD", callback_data: `calc|${amount}|USD` },
+        { text: "EUR", callback_data: `calc|${amount}|EUR` }
+      ],
+      [
+        { text: "CNY", callback_data: `calc|${amount}|CNY` },
+        { text: "JPY", callback_data: `calc|${amount}|JPY` }
+      ]
+    ]
+  };
+
+}
+
+function parseNumber(val) {
+
+  if (!val) return 0;
+
+  return parseFloat(
+    val.toString().replace(/\s/g, "").replace(",", ".")
+  );
+
+}
+
+async function calculate(amount, currency) {
+
+  const condRows = await sheetConditions.getRows();
+  const rateRows = await sheetRates.getRows();
+
+  const cond = condRows.find(r => r.Валюта === currency);
+  const rate = rateRows.find(r => r.Валюта === currency);
+
+  if (!cond || !rate) return null;
+
+  const markup = parseNumber(cond.Маркап);
+  const commission = parseNumber(cond.Комиссия);
+  const swift = parseNumber(cond.SWIFT);
+  const baseRate = parseNumber(rate.Курс);
+
+  const finalRate = baseRate + markup;
+
+  const rub = (amount + swift) * finalRate;
+
+  const total = rub + (rub * commission / 100);
+
+  return {
+    finalRate,
+    swift,
+    commission,
+    total
+  };
+
+}
+
+async function saveHistory(userId, username, currency, amount, rate, commission, total) {
+
+  await sheetHistory.addRow({
+    Дата: new Date(),
+    UserID: userId,
+    Username: username,
+    Валюта: currency,
+    Сумма: amount,
+    Курс: rate,
+    Комиссия: commission,
+    Итого: Math.round(total)
+  });
+
+}
+
+app.post(`/webhook/${TOKEN}`, async (req, res) => {
+
+  const update = req.body;
+
   try {
-    const update = req.body;
 
-    if (update.message?.text) {
+    if (update.message) {
+
       const chatId = update.message.chat.id;
-      const username = update.message.from?.username || "";
-      const text = update.message.text;
+      const text = (update.message.text || "").trim();
+      const userId = update.message.from.id;
+      const username = update.message.from.username || "";
 
       if (text === "/start") {
-        await sendMessage(chatId, "Привет! Бот работает через Railway 🚀");
-      } else {
 
-        await appendRow([
-          new Date().toISOString(),
-          chatId,
-          username,
-          text
-        ]);
+        await sendMessage(chatId, "Отправь сумму для расчета\n\nНапример:\n12500\nили\n12500 usd");
 
-        await sendMessage(chatId, "Сообщение записано в таблицу ✅");
       }
+
+      else if (/^\d+$/g.test(text)) {
+
+        const amount = parseFloat(text);
+
+        await sendMessage(chatId, "Выберите валюту", currencyButtons(amount));
+
+      }
+
+      else if (/^\d+\s[a-zA-Z]{3}$/g.test(text)) {
+
+        const parts = text.split(" ");
+        const amount = parseFloat(parts[0]);
+        const currency = parts[1].toUpperCase();
+
+        const calc = await calculate(amount, currency);
+
+        if (!calc) {
+          await sendMessage(chatId, "Не найден курс или условия");
+          return;
+        }
+
+        const msg =
+`Сумма поставщику: ${amount} ${currency}
+Курс: ${calc.finalRate.toFixed(4)}
+SWIFT: ${calc.swift} ${currency}
+Комиссия: ${calc.commission}%
+Итого к оплате: ${Math.round(calc.total)} RUB`;
+
+        await sendMessage(chatId, msg);
+
+        await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
+
+      }
+
     }
 
-    res.sendStatus(200);
+    if (update.callback_query) {
+
+      const data = update.callback_query.data;
+
+      const chatId = update.callback_query.message.chat.id;
+      const userId = update.callback_query.from.id;
+      const username = update.callback_query.from.username || "";
+
+      const parts = data.split("|");
+
+      const amount = parseFloat(parts[1]);
+      const currency = parts[2];
+
+      const calc = await calculate(amount, currency);
+
+      if (!calc) {
+        await sendMessage(chatId, "Не найден курс");
+        return;
+      }
+
+      const msg =
+`Сумма поставщику: ${amount} ${currency}
+Курс: ${calc.finalRate.toFixed(4)}
+SWIFT: ${calc.swift} ${currency}
+Комиссия: ${calc.commission}%
+Итого к оплате: ${Math.round(calc.total)} RUB`;
+
+      await sendMessage(chatId, msg);
+
+      await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
+
+    }
 
   } catch (e) {
-    console.error(e);
-    res.sendStatus(200);
+
+    console.log("ERROR", e);
+
   }
+
+  res.sendStatus(200);
+
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on ${PORT}`);
+app.get("/", (req, res) => {
+
+  res.send("PayBot Railway running");
+
+});
+
+const PORT = process.env.PORT || 8080;
+
+initSheets().then(() => {
+
+  app.listen(PORT, () => {
+
+    console.log("Server running on", PORT);
+
+  });
+
 });
