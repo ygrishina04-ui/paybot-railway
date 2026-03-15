@@ -74,21 +74,29 @@ async function calculate(amount, currency) {
   const condRows = await sheetConditions.getRows();
   const rateRows = await sheetRates.getRows();
 
-  const cond = condRows.find(r => r.валюта === currency);
-  const rate = rateRows.find(r => r.валюта === currency);
+  let cond = null;
+  let rate = null;
+
+  for (const r of condRows) {
+    if (r._rawData[0] === currency) cond = r;
+  }
+
+  for (const r of rateRows) {
+    if (r._rawData[0] === currency) rate = r;
+  }
 
   if (!cond || !rate) return null;
 
-  const markup = parseNumber(cond.наценка);
-  const commission = parseNumber(cond.комиссия);
-  const swift = parseNumber(cond.swift);
-  const baseRate = parseNumber(rate.курс);
+  const markup = parseNumber(cond._rawData[1]);
+  const commission = parseNumber(cond._rawData[2]);
+  const swift = parseNumber(cond._rawData[3]);
+  const baseRate = parseNumber(rate._rawData[1]);
 
   const finalRate = baseRate + markup;
 
   const rub = (amount + swift) * finalRate;
 
-  const total = rub + (rub * commission / 100);
+  const total = rub + rub * commission / 100;
 
   return {
     finalRate,
@@ -101,16 +109,16 @@ async function calculate(amount, currency) {
 
 async function saveHistory(userId, username, currency, amount, rate, commission, total) {
 
-  await sheetHistory.addRow({
-    дата: new Date(),
-    userid: userId,
-    username: username,
-    валюта: currency,
-    сумма: amount,
-    курс: rate,
-    комиссия: commission,
-    итого: Math.round(total)
-  });
+  await sheetHistory.addRow([
+    new Date(),
+    userId,
+    username,
+    currency,
+    amount,
+    rate,
+    commission,
+    Math.round(total)
+  ]);
 
 }
 
