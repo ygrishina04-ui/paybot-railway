@@ -1,3 +1,4 @@
+console.log("=== PAYBOT EXIMA NEW BUILD ===");
 const express = require("express");
 const axios = require("axios");
 const { GoogleSpreadsheet } = require("google-spreadsheet");
@@ -192,8 +193,9 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
       const userId = update.message.from.id;
       const username = update.message.from.username || "";
 
-      if (text === "/start") {
-        await sendMessage(chatId, "TEST VERSION 777");
+if (text === "/start") {
+  await sendMessage(chatId, "PAYBOT EXIMA BUILD 2026-03-16 V2");
+}
       } else if (/^\d+([.,]\d+)?$/g.test(text)) {
         const amount = parseNumber(text);
         await sendMessage(chatId, "Выберите валюту:", currencyButtons(amount));
