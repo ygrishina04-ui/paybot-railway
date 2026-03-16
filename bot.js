@@ -176,22 +176,16 @@ SWIFT: ${calc.swift} ${currency}
       }
     }
 
-    if (update.callback_query) {
-      const data = update.callback_query.data;
-      const chatId = update.callback_query.message.chat.id;
-      const userId = update.callback_query.from.id;
-      const username = update.callback_query.from.username || "";
+if (update.callback_query) {
+  const data = update.callback_query.data;
+  const chatId = update.callback_query.message.chat.id;
 
-      const parts = data.split("|");
-      const amount = parseFloat(parts[1]);
-      const currency = normalize(parts[2]);
+  await sendMessage(chatId, "DEBUG callback: " + data);
 
-      const calc = await calculate(amount, currency);
-
-      if (!calc) {
-        await sendMessage(chatId, "Курс не найден");
-        return res.sendStatus(200);
-      }
+  await axios.post(`${TELEGRAM_URL}/answerCallbackQuery`, {
+    callback_query_id: update.callback_query.id
+  });
+}}
 
       const msg =
 `Сумма поставщику: ${amount} ${currency}
