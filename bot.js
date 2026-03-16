@@ -14,13 +14,16 @@ let sheetConditions;
 let sheetRates;
 let sheetHistory;
 
+function normalize(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
 function parseNumber(v) {
-  if (!v) return 0;
-  return parseFloat(v.toString().replace(",", "."));
+  if (v === null || v === undefined || v === "") return 0;
+  return parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
 }
 
 async function initSheets() {
-
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
   const auth = new JWT({
@@ -30,17 +33,14 @@ async function initSheets() {
   });
 
   const doc = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
-
   await doc.loadInfo();
 
   sheetConditions = doc.sheetsByTitle["УСЛОВИЯ"];
   sheetRates = doc.sheetsByTitle["КУРСЫ ЦБ"];
   sheetHistory = doc.sheetsByTitle["ИСТОРИЯ"];
-
 }
 
 async function sendMessage(chatId, text, keyboard = null) {
-
   const payload = {
     chat_id: chatId,
     text: text
@@ -49,11 +49,9 @@ async function sendMessage(chatId, text, keyboard = null) {
   if (keyboard) payload.reply_markup = keyboard;
 
   await axios.post(`${TELEGRAM_URL}/sendMessage`, payload);
-
 }
 
 function currencyButtons(amount) {
-
   return {
     inline_keyboard: [
       [
@@ -66,24 +64,36 @@ function currencyButtons(amount) {
       ]
     ]
   };
-
 }
 
 async function calculate(amount, currency) {
-
   const condRows = await sheetConditions.getRows();
   const rateRows = await sheetRates.getRows();
+
+  const target = normalize(currency);
 
   let cond = null;
   let rate = null;
 
   for (const r of condRows) {
-    if (r._rawData[0] === currency) cond = r;
+    const rowCurrency = normalize(r._rawData[0]);
+    if (rowCurrency === target) {
+      cond = r;
+      break;
+    }
   }
 
   for (const r of rateRows) {
-    if (r._rawData[0] === currency) rate = r;
+    const rowCurrency = normalize(r._rawData[0]);
+    if (rowCurrency === target) {
+      rate = r;
+      break;
+    }
   }
+
+  console.log("TARGET CURRENCY:", target);
+  console.log("FOUND CONDITION:", cond ? cond._rawData : null);
+  console.log("FOUND RATE:", rate ? rate._rawData : null);
 
   if (!cond || !rate) return null;
 
@@ -93,10 +103,8 @@ async function calculate(amount, currency) {
   const baseRate = parseNumber(rate._rawData[1]);
 
   const finalRate = baseRate + markup;
-
   const rub = (amount + swift) * finalRate;
-
-  const total = rub + rub * commission / 100;
+  const total = rub + (rub * commission / 100);
 
   return {
     finalRate,
@@ -104,11 +112,9 @@ async function calculate(amount, currency) {
     commission,
     total
   };
-
 }
 
 async function saveHistory(userId, username, currency, amount, rate, commission, total) {
-
   await sheetHistory.addRow([
     new Date(),
     userId,
@@ -119,54 +125,41 @@ async function saveHistory(userId, username, currency, amount, rate, commission,
     commission,
     Math.round(total)
   ]);
-
 }
 
 app.post(`/webhook/${TOKEN}`, async (req, res) => {
-
   const update = req.body;
 
   try {
-
     if (update.message) {
-
       const chatId = update.message.chat.id;
       const text = (update.message.text || "").trim();
       const userId = update.message.from.id;
       const username = update.message.from.username || "";
 
       if (text === "/start") {
-
-        await sendMessage(chatId,
-`Отправь сумму для расчета
+        await sendMessage(
+          chatId,
+          `Отправь сумму для расчета
 
 Например:
 12500
 или
-12500 usd`);
-
-      }
-
-      else if (/^\d+$/g.test(text)) {
-
+12500 usd`
+        );
+      } else if (/^\d+$/g.test(text)) {
         const amount = parseFloat(text);
-
         await sendMessage(chatId, "Выберите валюту", currencyButtons(amount));
-
-      }
-
-      else if (/^\d+\s[a-zA-Z]{3}$/g.test(text)) {
-
+      } else if (/^\d+\s[a-zA-Z]{3}$/g.test(text)) {
         const parts = text.split(" ");
-
         const amount = parseFloat(parts[0]);
-        const currency = parts[1].toUpperCase();
+        const currency = normalize(parts[1]);
 
         const calc = await calculate(amount, currency);
 
         if (!calc) {
           await sendMessage(chatId, "Курс или условия не найдены");
-          return;
+          return res.sendStatus(200);
         }
 
         const msg =
@@ -177,31 +170,27 @@ SWIFT: ${calc.swift} ${currency}
 Итого к оплате: ${Math.round(calc.total)} RUB`;
 
         await sendMessage(chatId, msg);
-
         await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
-
+      } else {
+        await sendMessage(chatId, "Формат запроса:\n12500\nили\n12500 usd");
       }
-
     }
 
     if (update.callback_query) {
-
       const data = update.callback_query.data;
-
       const chatId = update.callback_query.message.chat.id;
       const userId = update.callback_query.from.id;
       const username = update.callback_query.from.username || "";
 
       const parts = data.split("|");
-
       const amount = parseFloat(parts[1]);
-      const currency = parts[2];
+      const currency = normalize(parts[2]);
 
       const calc = await calculate(amount, currency);
 
       if (!calc) {
         await sendMessage(chatId, "Курс не найден");
-        return;
+        return res.sendStatus(200);
       }
 
       const msg =
@@ -212,35 +201,27 @@ SWIFT: ${calc.swift} ${currency}
 Итого к оплате: ${Math.round(calc.total)} RUB`;
 
       await sendMessage(chatId, msg);
-
       await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
 
+      await axios.post(`${TELEGRAM_URL}/answerCallbackQuery`, {
+        callback_query_id: update.callback_query.id
+      });
     }
-
   } catch (e) {
-
     console.log("BOT ERROR", e);
-
   }
 
   res.sendStatus(200);
-
 });
 
 app.get("/", (req, res) => {
-
   res.send("PayBot Railway running");
-
 });
 
 const PORT = process.env.PORT || 8080;
 
 initSheets().then(() => {
-
   app.listen(PORT, () => {
-
     console.log("Server running on", PORT);
-
   });
-
 });
