@@ -23,6 +23,34 @@ function parseNumber(v) {
   return parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
 }
 
+function formatRub(value) {
+  return Number(value).toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function formatAmount(value) {
+  return Number(value).toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function formatRate(value) {
+  return Number(value).toLocaleString("ru-RU", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
+  });
+}
+
+function formatPercent(value) {
+  return Number(value).toLocaleString("ru-RU", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 2
+  });
+}
+
 async function initSheets() {
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
@@ -135,16 +163,20 @@ async function saveHistory(userId, username, currency, amount, rate, commission,
     amount,
     rate,
     commission,
-    Math.round(total)
+    total
   ]);
 }
 
 function buildResultMessage(amount, currency, calc) {
-  return `Сумма поставщику: ${amount} ${currency}
-Курс: ${calc.finalRate.toFixed(4)}
-SWIFT: ${calc.swift} ${currency}
-Комиссия: ${calc.commission}%
-Итого к оплате: ${Math.round(calc.total)} RUB`;
+  return `💳 Расчет платежа
+
+Сумма поставщику: ${formatAmount(amount)} ${currency}
+Курс: ${formatRate(calc.finalRate)}
+SWIFT: ${formatAmount(calc.swift)} ${currency}
+Комиссия: ${formatPercent(calc.commission)} %
+
+——————————
+Итого к оплате: ${formatRub(calc.total)} RUB`;
 }
 
 app.post(`/webhook/${TOKEN}`, async (req, res) => {
@@ -164,7 +196,9 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
       if (text === "/start") {
         await sendMessage(
           chatId,
-          `Отправь сумму для расчета
+          `💳 PayBot Exima
+
+Отправь сумму для расчета.
 
 Например:
 12500
@@ -173,7 +207,7 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
         );
       } else if (/^\d+([.,]\d+)?$/g.test(text)) {
         const amount = parseNumber(text);
-        await sendMessage(chatId, "Выберите валюту", currencyButtons(amount));
+        await sendMessage(chatId, "Выберите валюту:", currencyButtons(amount));
       } else if (/^\d+([.,]\d+)?\s+[a-zA-Z]{3}$/g.test(text)) {
         const parts = text.split(/\s+/);
         const amount = parseNumber(parts[0]);
@@ -191,7 +225,13 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
         await sendMessage(chatId, msg);
         await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
       } else {
-        await sendMessage(chatId, "Формат запроса:\n12500\nили\n12500 usd");
+        await sendMessage(
+          chatId,
+          `Формат запроса:
+12500
+или
+12500 usd`
+        );
       }
     }
 
