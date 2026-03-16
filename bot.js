@@ -38,6 +38,12 @@ async function initSheets() {
   sheetConditions = doc.sheetsByTitle["УСЛОВИЯ"];
   sheetRates = doc.sheetsByTitle["КУРСЫ ЦБ"];
   sheetHistory = doc.sheetsByTitle["ИСТОРИЯ"];
+
+  console.log("Sheets loaded:", {
+    conditions: !!sheetConditions,
+    rates: !!sheetRates,
+    history: !!sheetHistory
+  });
 }
 
 async function sendMessage(chatId, text, keyboard = null) {
@@ -46,7 +52,9 @@ async function sendMessage(chatId, text, keyboard = null) {
     text: text
   };
 
-  if (keyboard) payload.reply_markup = keyboard;
+  if (keyboard) {
+    payload.reply_markup = keyboard;
+  }
 
   await axios.post(`${TELEGRAM_URL}/sendMessage`, payload);
 }
@@ -56,10 +64,9 @@ function currencyButtons(amount) {
     inline_keyboard: [
       [
         { text: "USD", callback_data: `calc|${amount}|USD` },
-        { text: "EUR", callback_data: `calc|${amount}|EUR` }
+        { text: "CNY", callback_data: `calc|${amount}|CNY` }
       ],
       [
-        { text: "CNY", callback_data: `calc|${amount}|CNY` },
         { text: "JPY", callback_data: `calc|${amount}|JPY` }
       ]
     ]
@@ -102,6 +109,11 @@ async function calculate(amount, currency) {
   const swift = parseNumber(cond._rawData[3]);
   const baseRate = parseNumber(rate._rawData[1]);
 
+  if (!baseRate || Number.isNaN(baseRate)) {
+    console.log("BASE RATE INVALID:", rate._rawData);
+    return null;
+  }
+
   const finalRate = baseRate + markup;
   const rub = (amount + swift) * finalRate;
   const total = rub + (rub * commission / 100);
@@ -116,7 +128,7 @@ async function calculate(amount, currency) {
 
 async function saveHistory(userId, username, currency, amount, rate, commission, total) {
   await sheetHistory.addRow([
-    new Date(),
+    new Date().toISOString(),
     userId,
     username,
     currency,
@@ -127,15 +139,27 @@ async function saveHistory(userId, username, currency, amount, rate, commission,
   ]);
 }
 
+function buildResultMessage(amount, currency, calc) {
+  return `Сумма поставщику: ${amount} ${currency}
+Курс: ${calc.finalRate.toFixed(4)}
+SWIFT: ${calc.swift} ${currency}
+Комиссия: ${calc.commission}%
+Итого к оплате: ${Math.round(calc.total)} RUB`;
+}
+
 app.post(`/webhook/${TOKEN}`, async (req, res) => {
   const update = req.body;
 
   try {
+    console.log("Incoming update:", JSON.stringify(update));
+
     if (update.message) {
       const chatId = update.message.chat.id;
       const text = (update.message.text || "").trim();
       const userId = update.message.from.id;
       const username = update.message.from.username || "";
+
+      console.log("Incoming text:", text);
 
       if (text === "/start") {
         await sendMessage(
@@ -147,27 +171,22 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
 или
 12500 usd`
         );
-      } else if (/^\d+$/g.test(text)) {
-        const amount = parseFloat(text);
+      } else if (/^\d+([.,]\d+)?$/g.test(text)) {
+        const amount = parseNumber(text);
         await sendMessage(chatId, "Выберите валюту", currencyButtons(amount));
-      } else if (/^\d+\s[a-zA-Z]{3}$/g.test(text)) {
-        const parts = text.split(" ");
-        const amount = parseFloat(parts[0]);
+      } else if (/^\d+([.,]\d+)?\s+[a-zA-Z]{3}$/g.test(text)) {
+        const parts = text.split(/\s+/);
+        const amount = parseNumber(parts[0]);
         const currency = normalize(parts[1]);
 
         const calc = await calculate(amount, currency);
 
         if (!calc) {
-          await sendMessage(chatId, "Курс или условия не найдены");
+          await sendMessage(chatId, `Курс или условия не найдены для валюты ${currency}`);
           return res.sendStatus(200);
         }
 
-        const msg =
-`Сумма поставщику: ${amount} ${currency}
-Курс: ${calc.finalRate.toFixed(4)}
-SWIFT: ${calc.swift} ${currency}
-Комиссия: ${calc.commission}%
-Итого к оплате: ${Math.round(calc.total)} RUB`;
+        const msg = buildResultMessage(amount, currency, calc);
 
         await sendMessage(chatId, msg);
         await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
@@ -176,33 +195,37 @@ SWIFT: ${calc.swift} ${currency}
       }
     }
 
-if (update.callback_query) {
-  const data = update.callback_query.data;
-  const chatId = update.callback_query.message.chat.id;
+    if (update.callback_query) {
+      const data = update.callback_query.data;
+      const chatId = update.callback_query.message.chat.id;
+      const userId = update.callback_query.from.id;
+      const username = update.callback_query.from.username || "";
 
-  await sendMessage(chatId, "DEBUG callback: " + data);
+      console.log("Callback data:", data);
 
-  await axios.post(`${TELEGRAM_URL}/answerCallbackQuery`, {
-    callback_query_id: update.callback_query.id
-  });
-}}
+      const parts = data.split("|");
 
-      const msg =
-`Сумма поставщику: ${amount} ${currency}
-Курс: ${calc.finalRate.toFixed(4)}
-SWIFT: ${calc.swift} ${currency}
-Комиссия: ${calc.commission}%
-Итого к оплате: ${Math.round(calc.total)} RUB`;
+      if (parts.length === 3 && parts[0] === "calc") {
+        const amount = parseNumber(parts[1]);
+        const currency = normalize(parts[2]);
 
-      await sendMessage(chatId, msg);
-      await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
+        const calc = await calculate(amount, currency);
+
+        if (!calc) {
+          await sendMessage(chatId, `Курс или условия не найдены для валюты ${currency}`);
+        } else {
+          const msg = buildResultMessage(amount, currency, calc);
+          await sendMessage(chatId, msg);
+          await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
+        }
+      }
 
       await axios.post(`${TELEGRAM_URL}/answerCallbackQuery`, {
         callback_query_id: update.callback_query.id
       });
     }
   } catch (e) {
-    console.log("BOT ERROR", e);
+    console.log("BOT ERROR:", e.response ? e.response.data : e.message);
   }
 
   res.sendStatus(200);
@@ -214,8 +237,12 @@ app.get("/", (req, res) => {
 
 const PORT = process.env.PORT || 8080;
 
-initSheets().then(() => {
-  app.listen(PORT, () => {
-    console.log("Server running on", PORT);
+initSheets()
+  .then(() => {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log("Server running on", PORT);
+    });
+  })
+  .catch((e) => {
+    console.log("INIT ERROR:", e.message);
   });
-});
