@@ -10,7 +10,7 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const app = express();
 app.use(express.json());
 
-console.log("=== PAYBOT EXIMA BUILD 2026-03-16 ===");
+console.log("=== PAYBOT EXIMA BUILD ===");
 
 let sheetConditions;
 let sheetRates;
@@ -54,6 +54,7 @@ function formatRub(value) {
 }
 
 async function initSheets() {
+
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
   const auth = new JWT({
@@ -63,20 +64,19 @@ async function initSheets() {
   });
 
   const doc = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
+
   await doc.loadInfo();
 
   sheetConditions = doc.sheetsByTitle["УСЛОВИЯ"];
   sheetRates = doc.sheetsByTitle["КУРСЫ ЦБ"];
   sheetHistory = doc.sheetsByTitle["ИСТОРИЯ"];
 
-  console.log("Sheets loaded:", {
-    conditions: !!sheetConditions,
-    rates: !!sheetRates,
-    history: !!sheetHistory
-  });
+  console.log("Sheets loaded");
+
 }
 
 async function sendMessage(chatId, text, keyboard = null) {
+
   const payload = {
     chat_id: chatId,
     text
@@ -87,9 +87,11 @@ async function sendMessage(chatId, text, keyboard = null) {
   }
 
   await axios.post(`${TELEGRAM_URL}/sendMessage`, payload);
+
 }
 
 function currencyButtons(amount) {
+
   return {
     inline_keyboard: [
       [
@@ -101,9 +103,11 @@ function currencyButtons(amount) {
       ]
     ]
   };
+
 }
 
 async function calculate(amount, currency) {
+
   const condRows = await sheetConditions.getRows();
   const rateRows = await sheetRates.getRows();
 
@@ -113,24 +117,26 @@ async function calculate(amount, currency) {
   let rate = null;
 
   for (const r of condRows) {
+
     const rowCurrency = normalize(r._rawData[0]);
+
     if (rowCurrency === target) {
       cond = r;
       break;
     }
+
   }
 
   for (const r of rateRows) {
+
     const rowCurrency = normalize(r._rawData[0]);
+
     if (rowCurrency === target) {
       rate = r;
       break;
     }
-  }
 
-  console.log("TARGET CURRENCY:", target);
-  console.log("FOUND CONDITION:", cond ? cond._rawData : null);
-  console.log("FOUND RATE:", rate ? rate._rawData : null);
+  }
 
   if (!cond || !rate) return null;
 
@@ -139,27 +145,22 @@ async function calculate(amount, currency) {
   const swift = parseNumber(cond._rawData[3]);
   const baseRate = parseNumber(rate._rawData[1]);
 
-  if (Number.isNaN(baseRate) || baseRate <= 0) {
-    console.log("BASE RATE INVALID:", rate._rawData);
-    return null;
-  }
-
   const finalRate = baseRate + markup;
-  const rubWithoutCommission = (amount + swift) * finalRate;
-  const commissionValue = rubWithoutCommission * commission / 100;
-  const total = rubWithoutCommission + commissionValue;
+
+  const rub = (amount + swift) * finalRate;
+  const total = rub + (rub * commission / 100);
 
   return {
     finalRate,
     swift,
     commission,
-    rubWithoutCommission,
-    commissionValue,
     total
   };
+
 }
 
 async function saveHistory(userId, username, currency, amount, rate, commission, total) {
+
   await sheetHistory.addRow([
     new Date().toISOString(),
     userId,
@@ -170,9 +171,11 @@ async function saveHistory(userId, username, currency, amount, rate, commission,
     commission,
     total
   ]);
+
 }
 
 function buildResultMessage(amount, currency, calc) {
+
   return `💳 Расчет платежа
 
 Сумма поставщику: ${formatAmount(amount)} ${currency}
@@ -182,23 +185,51 @@ SWIFT: ${formatAmount(calc.swift)} ${currency}
 
 ——————————
 Итого к оплате: ${formatRub(calc.total)} RUB`;
+
+}
+
+async function buildRatesMessage() {
+
+  const rateRows = await sheetRates.getRows();
+
+  const rates = [];
+
+  for (const r of rateRows) {
+
+    const currency = normalize(r._rawData[0]);
+    const rate = parseNumber(r._rawData[1]);
+
+    if (currency && rate) {
+      rates.push(`${currency} — ${formatRate(rate)}`);
+    }
+
+  }
+
+  if (!rates.length) {
+    return "Курсы не найдены";
+  }
+
+  return `📊 Курсы ЦБ
+
+${rates.join("\n")}`;
+
 }
 
 app.post(`/webhook/${TOKEN}`, async (req, res) => {
+
   const update = req.body;
 
   try {
-    console.log("Incoming update:", JSON.stringify(update));
 
     if (update.message) {
+
       const chatId = update.message.chat.id;
       const text = (update.message.text || "").trim();
       const userId = update.message.from.id;
       const username = update.message.from.username || "";
 
-      console.log("Incoming text:", text);
-
       if (text === "/start") {
+
         await sendMessage(
           chatId,
           `💳 PayBot Exima
@@ -208,26 +239,57 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
 Например:
 12500
 или
-12500 usd`
+12500 usd
+
+Команда:
+/курсы`
         );
-      } else if (/^\d+([.,]\d+)?$/g.test(text)) {
+
+      }
+
+      else if (text === "/курсы") {
+
+        const ratesMessage = await buildRatesMessage();
+        await sendMessage(chatId, ratesMessage);
+
+      }
+
+      else if (/^\d+([.,]\d+)?$/g.test(text)) {
+
         const amount = parseNumber(text);
-        await sendMessage(chatId, "Выберите валюту:", currencyButtons(amount));
-      } else if (/^\d+([.,]\d+)?\s+[a-zA-Z]{3}$/g.test(text)) {
+
+        await sendMessage(
+          chatId,
+          "Выберите валюту:",
+          currencyButtons(amount)
+        );
+
+      }
+
+      else if (/^\d+([.,]\d+)?\s+[a-zA-Z]{3}$/g.test(text)) {
+
         const parts = text.split(/\s+/);
+
         const amount = parseNumber(parts[0]);
         const currency = normalize(parts[1]);
 
         const calc = await calculate(amount, currency);
 
         if (!calc) {
-          await sendMessage(chatId, `Курс или условия не найдены для валюты ${currency}`);
+
+          await sendMessage(
+            chatId,
+            `Курс или условия не найдены для валюты ${currency}`
+          );
+
           return res.sendStatus(200);
+
         }
 
         const msg = buildResultMessage(amount, currency, calc);
 
         await sendMessage(chatId, msg);
+
         await saveHistory(
           userId,
           username,
@@ -237,39 +299,56 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
           calc.commission,
           calc.total
         );
-      } else {
+
+      }
+
+      else {
+
         await sendMessage(
           chatId,
           `Формат запроса:
 12500
 или
-12500 usd`
+12500 usd
+
+Команда:
+/курсы`
         );
+
       }
+
     }
 
     if (update.callback_query) {
+
       const data = update.callback_query.data;
+
       const chatId = update.callback_query.message.chat.id;
       const userId = update.callback_query.from.id;
       const username = update.callback_query.from.username || "";
 
-      console.log("Callback data:", data);
-
       const parts = data.split("|");
 
       if (parts.length === 3 && parts[0] === "calc") {
+
         const amount = parseNumber(parts[1]);
         const currency = normalize(parts[2]);
 
         const calc = await calculate(amount, currency);
 
         if (!calc) {
-          await sendMessage(chatId, `Курс или условия не найдены для валюты ${currency}`);
+
+          await sendMessage(
+            chatId,
+            `Курс или условия не найдены для валюты ${currency}`
+          );
+
         } else {
+
           const msg = buildResultMessage(amount, currency, calc);
 
           await sendMessage(chatId, msg);
+
           await saveHistory(
             userId,
             username,
@@ -279,32 +358,50 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
             calc.commission,
             calc.total
           );
+
         }
+
+        await axios.post(`${TELEGRAM_URL}/answerCallbackQuery`, {
+          callback_query_id: update.callback_query.id
+        });
+
       }
 
-      await axios.post(`${TELEGRAM_URL}/answerCallbackQuery`, {
-        callback_query_id: update.callback_query.id
-      });
     }
-  } catch (e) {
-    console.log("BOT ERROR:", e.response ? e.response.data : e.message);
+
+  }
+
+  catch (e) {
+
+    console.log(
+      "BOT ERROR:",
+      e.response ? e.response.data : e.message
+    );
+
   }
 
   res.sendStatus(200);
+
 });
 
 app.get("/", (req, res) => {
+
   res.send("PayBot Railway running");
+
 });
 
 const PORT = process.env.PORT || 8080;
 
 initSheets()
   .then(() => {
+
     app.listen(PORT, "0.0.0.0", () => {
       console.log("Server running on", PORT);
     });
+
   })
   .catch((e) => {
+
     console.log("INIT ERROR:", e.message);
+
   });
