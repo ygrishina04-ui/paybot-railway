@@ -10,6 +10,8 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const app = express();
 app.use(express.json());
 
+console.log("=== PAYBOT VERSION 777 ===");
+
 let sheetConditions;
 let sheetRates;
 let sheetHistory;
@@ -168,14 +170,13 @@ async function saveHistory(userId, username, currency, amount, rate, commission,
 }
 
 function buildResultMessage(amount, currency, calc) {
-  return `💳 Расчет платежа
+  return `TEST VERSION 777
 
 Сумма поставщику: ${formatAmount(amount)} ${currency}
 Курс: ${formatRate(calc.finalRate)}
 SWIFT: ${formatAmount(calc.swift)} ${currency}
 Комиссия: ${formatPercent(calc.commission)} %
 
-——————————
 Итого к оплате: ${formatRub(calc.total)} RUB`;
 }
 
@@ -191,20 +192,8 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
       const userId = update.message.from.id;
       const username = update.message.from.username || "";
 
-      console.log("Incoming text:", text);
-
       if (text === "/start") {
-        await sendMessage(
-          chatId,
-          `💳 PayBot Exima
-
-Отправь сумму для расчета.
-
-Например:
-12500
-или
-12500 usd`
-        );
+        await sendMessage(chatId, "TEST VERSION 777");
       } else if (/^\d+([.,]\d+)?$/g.test(text)) {
         const amount = parseNumber(text);
         await sendMessage(chatId, "Выберите валюту:", currencyButtons(amount));
@@ -220,18 +209,8 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
           return res.sendStatus(200);
         }
 
-        const msg = buildResultMessage(amount, currency, calc);
-
-        await sendMessage(chatId, msg);
+        await sendMessage(chatId, buildResultMessage(amount, currency, calc));
         await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
-      } else {
-        await sendMessage(
-          chatId,
-          `Формат запроса:
-12500
-или
-12500 usd`
-        );
       }
     }
 
@@ -240,8 +219,6 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
       const chatId = update.callback_query.message.chat.id;
       const userId = update.callback_query.from.id;
       const username = update.callback_query.from.username || "";
-
-      console.log("Callback data:", data);
 
       const parts = data.split("|");
 
@@ -254,8 +231,7 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
         if (!calc) {
           await sendMessage(chatId, `Курс или условия не найдены для валюты ${currency}`);
         } else {
-          const msg = buildResultMessage(amount, currency, calc);
-          await sendMessage(chatId, msg);
+          await sendMessage(chatId, buildResultMessage(amount, currency, calc));
           await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
         }
       }
