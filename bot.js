@@ -247,7 +247,7 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
 
       }
 
-      else if (text === "/курсы") {
+      else if (text === "/kurs") {
 
         const ratesMessage = await buildRatesMessage();
         await sendMessage(chatId, ratesMessage);
