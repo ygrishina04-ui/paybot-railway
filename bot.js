@@ -1,4 +1,3 @@
-console.log("=== PAYBOT EXIMA NEW BUILD ===");
 const express = require("express");
 const axios = require("axios");
 const { GoogleSpreadsheet } = require("google-spreadsheet");
@@ -11,7 +10,7 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const app = express();
 app.use(express.json());
 
-console.log("=== PAYBOT VERSION 777 ===");
+console.log("=== PAYBOT EXIMA BUILD 2026-03-16 ===");
 
 let sheetConditions;
 let sheetRates;
@@ -24,13 +23,6 @@ function normalize(value) {
 function parseNumber(v) {
   if (v === null || v === undefined || v === "") return 0;
   return parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
-}
-
-function formatRub(value) {
-  return Number(value).toLocaleString("ru-RU", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
 }
 
 function formatAmount(value) {
@@ -50,6 +42,13 @@ function formatRate(value) {
 function formatPercent(value) {
   return Number(value).toLocaleString("ru-RU", {
     minimumFractionDigits: 1,
+    maximumFractionDigits: 2
+  });
+}
+
+function formatRub(value) {
+  return Number(value).toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
 }
@@ -80,7 +79,7 @@ async function initSheets() {
 async function sendMessage(chatId, text, keyboard = null) {
   const payload = {
     chat_id: chatId,
-    text: text
+    text
   };
 
   if (keyboard) {
@@ -140,19 +139,22 @@ async function calculate(amount, currency) {
   const swift = parseNumber(cond._rawData[3]);
   const baseRate = parseNumber(rate._rawData[1]);
 
-  if (!baseRate || Number.isNaN(baseRate)) {
+  if (Number.isNaN(baseRate) || baseRate <= 0) {
     console.log("BASE RATE INVALID:", rate._rawData);
     return null;
   }
 
   const finalRate = baseRate + markup;
-  const rub = (amount + swift) * finalRate;
-  const total = rub + (rub * commission / 100);
+  const rubWithoutCommission = (amount + swift) * finalRate;
+  const commissionValue = rubWithoutCommission * commission / 100;
+  const total = rubWithoutCommission + commissionValue;
 
   return {
     finalRate,
     swift,
     commission,
+    rubWithoutCommission,
+    commissionValue,
     total
   };
 }
@@ -171,13 +173,14 @@ async function saveHistory(userId, username, currency, amount, rate, commission,
 }
 
 function buildResultMessage(amount, currency, calc) {
-  return `TEST VERSION 777
+  return `💳 Расчет платежа
 
 Сумма поставщику: ${formatAmount(amount)} ${currency}
 Курс: ${formatRate(calc.finalRate)}
 SWIFT: ${formatAmount(calc.swift)} ${currency}
 Комиссия: ${formatPercent(calc.commission)} %
 
+——————————
 Итого к оплате: ${formatRub(calc.total)} RUB`;
 }
 
@@ -193,9 +196,20 @@ app.post(`/webhook/${TOKEN}`, async (req, res) => {
       const userId = update.message.from.id;
       const username = update.message.from.username || "";
 
-if (text === "/start") {
-  await sendMessage(chatId, "PAYBOT EXIMA BUILD 2026-03-16 V2");
-}
+      console.log("Incoming text:", text);
+
+      if (text === "/start") {
+        await sendMessage(
+          chatId,
+          `💳 PayBot Exima
+
+Отправь сумму для расчета.
+
+Например:
+12500
+или
+12500 usd`
+        );
       } else if (/^\d+([.,]\d+)?$/g.test(text)) {
         const amount = parseNumber(text);
         await sendMessage(chatId, "Выберите валюту:", currencyButtons(amount));
@@ -211,8 +225,26 @@ if (text === "/start") {
           return res.sendStatus(200);
         }
 
-        await sendMessage(chatId, buildResultMessage(amount, currency, calc));
-        await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
+        const msg = buildResultMessage(amount, currency, calc);
+
+        await sendMessage(chatId, msg);
+        await saveHistory(
+          userId,
+          username,
+          currency,
+          amount,
+          calc.finalRate,
+          calc.commission,
+          calc.total
+        );
+      } else {
+        await sendMessage(
+          chatId,
+          `Формат запроса:
+12500
+или
+12500 usd`
+        );
       }
     }
 
@@ -221,6 +253,8 @@ if (text === "/start") {
       const chatId = update.callback_query.message.chat.id;
       const userId = update.callback_query.from.id;
       const username = update.callback_query.from.username || "";
+
+      console.log("Callback data:", data);
 
       const parts = data.split("|");
 
@@ -233,8 +267,18 @@ if (text === "/start") {
         if (!calc) {
           await sendMessage(chatId, `Курс или условия не найдены для валюты ${currency}`);
         } else {
-          await sendMessage(chatId, buildResultMessage(amount, currency, calc));
-          await saveHistory(userId, username, currency, amount, calc.finalRate, calc.commission, calc.total);
+          const msg = buildResultMessage(amount, currency, calc);
+
+          await sendMessage(chatId, msg);
+          await saveHistory(
+            userId,
+            username,
+            currency,
+            amount,
+            calc.finalRate,
+            calc.commission,
+            calc.total
+          );
         }
       }
 
